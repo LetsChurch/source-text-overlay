@@ -44,6 +44,53 @@ def nth_word(text, word, nth):
     ms = list(re.finditer(r"\b" + re.escape(word) + r"\b", text, re.I))
     return (ms[nth - 1].start(), ms[nth - 1].end()) if 1 <= nth <= len(ms) else None
 
+# --- Strong's heuristic ------------------------------------------------------
+# When the store carries per-word Strong's numbers (the optional `tokens` map,
+# §4), resolution can anchor by Strong's instead of surface wording — robust
+# across translations regardless of how each renders a word. Two uses:
+#   * divine name: find the n-th token whose Strong's is YHWH (works even when a
+#     translation renders it "Yahweh"/"Jehovah" with no LORD-caps convention);
+#   * quotation: align the annotation's `strongs` sequence to the verse tokens.
+
+YHWH = {"H3068", "H3069"}  # YHWH (H3069 = YHWH pointed as Elohim, KJV "GOD")
+
+def norm_strong(s):
+    return re.sub(r"^([GH])0+(\d)", r"\1\2", s) if s else s
+
+def vtokens(tokens, ref):
+    """Per-verse [(strong, start, end)] from the store's optional token map."""
+    return [(norm_strong(t[0]), t[1], t[2]) for t in tokens.get(ref, [])]
+
+def align_strongs(seq, vt, min_cov=0.5):
+    """LCS-align an annotation's Strong's sequence `seq` to a verse's Strong's
+    tokens `vt`; return (start, end) of the matched run, or None when coverage is
+    too weak. Robust to wording/word-order differences between translations."""
+    a = [norm_strong(s) for s in seq if s]
+    b = [(s, st, en) for s, st, en in vt if s]
+    if not a or not b:
+        return None
+    bs = [s for s, _, _ in b]
+    n, m = len(a), len(bs)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            dp[i][j] = dp[i + 1][j + 1] + 1 if a[i] == bs[j] \
+                else max(dp[i + 1][j], dp[i][j + 1])
+    i = j = 0
+    matched = []
+    while i < n and j < m:
+        if a[i] == bs[j]:
+            matched.append(j)
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    if len(matched) < max(2, int(len(a) * min_cov)):
+        return None
+    return (b[matched[0]][1], b[matched[-1]][2])
+
 def place(aid, tr, ref, start, end, matched, method, conf, **extra):
     return dict(annotation_id=aid, translation=tr, ref=ref, start=start, end=end,
                 matched_text=matched, method=method, confidence=conf or "high",
@@ -63,6 +110,7 @@ def main():
     recs = [json.loads(l) for l in open(l1path, encoding="utf-8")]
     store = json.load(open(storepath, encoding="utf-8"))
     tr, V = store["translation"], store["verses"]
+    TOKENS = store.get("tokens", {})  # optional per-word Strong's (§4)
 
     placements, queue, done = [], [], set()
     per_verse = {}
@@ -78,6 +126,16 @@ def main():
                 continue
             done.add(ref)
             group = sorted(per_verse[ref], key=lambda x: x["ordinal"])
+            # Strong's heuristic: anchor each divine name to the n-th YHWH-tagged
+            # token. Works for any translation (incl. ones that render "Yahweh"),
+            # not just those using the LORD-caps convention the regex below needs.
+            yhwh = [(st, en) for s, st, en in vtokens(TOKENS, ref) if s in YHWH]
+            if text and len(yhwh) == len(group):
+                for a, (st, en) in zip(group, yhwh):
+                    placements.append(place(a["id"], tr, ref, st, en, text[st:en],
+                                            "strongs", a["confidence"],
+                                            kind="substitution", to=a["display_form"]))
+                continue
             found = list(TOK.finditer(text)) if text else []
             if text and [m.group(0) for m in found] == [a["traditional_form"] for a in group]:
                 for a, m in zip(group, found):
@@ -103,6 +161,17 @@ def main():
                 queue.append(queue_item(r, text))
 
         elif feat == "ot_quotation":
+            # Strong's heuristic first: if the annotation carries the quoted words'
+            # Strong's sequence and the store has tokens, align by Strong's (robust
+            # to differing wording). Fall back to surface-word alignment otherwise.
+            sp = align_strongs(r["strongs"], vtokens(TOKENS, ref)) \
+                if r.get("strongs") else None
+            if sp:
+                placements.append(place(r["id"], tr, ref, sp[0], sp[1],
+                                        text[sp[0]:sp[1]], "strongs", r["confidence"],
+                                        kind="mark", style="quotation",
+                                        source=r["cross_ref"]))
+                continue
             al = align_quote(r["quote_text"], text) if text else None
             if al and al[0] >= 0.6:
                 placements.append(place(r["id"], tr, ref, al[1], al[2], text[al[1]:al[2]],

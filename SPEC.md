@@ -157,6 +157,22 @@ offsets are measured against.
   "verses": { "Book.Chapter.Verse": "normalized verse text", ... } }
 ```
 
+**Optional Strong's token layer.** A store MAY carry a `tokens` map alongside
+`verses`, giving the per-word Strong's numbers with their offsets into the
+normalized verse text:
+
+```json
+"tokens": { "Book.Chapter.Verse": [ ["H3068", 4, 8], ["G2424", 12, 19], ... ] }
+```
+
+Each entry is `[strong, start, end]` in the store's declared offset unit. This is
+the substrate for the **Strong's heuristic** in resolution (§5.2): because Strong's
+numbers are language- and translation-independent, anchoring to them is far more
+robust than matching surface wording or a casing convention. The layer is optional
+and additive — a text-only store resolves exactly as before. Build it from any
+Strong's-tagged source (interlinear, tagged translation); plain text sources simply
+omit it.
+
 **Normalization (REQUIRED, declared per store).** Offsets are only meaningful
 against an exact byte/character sequence, so the store MUST fix and document:
 - whitespace handling (e.g. collapse runs to single spaces, trim ends),
@@ -183,7 +199,7 @@ coincide; declaring the unit avoids ambiguity for any astral characters.
 | `ref` | yes | Verse ref in the *translation's* versification (post-mapping). |
 | `start`, `end` | yes* | Half-open offset range into the normalized verse text (`*` omit/zero-length for whole-verse or pure-point notes). |
 | `matched_text` | no | The base substring matched (for audit/validation). |
-| `method` | yes | `ordinal` \| `aligned` \| `model` \| `manual`. |
+| `method` | yes | `ordinal` \| `strongs` \| `aligned` \| `model` \| `manual`. |
 | `confidence` | no | `high` \| `medium` \| `low`. |
 | `status` | yes | `ok` \| `needs_review` \| `unresolved`. |
 
@@ -200,9 +216,16 @@ For each annotation:
 2. **Resolve the anchor** to `[start, end)`:
    - `verse` → whole verse.
    - `ordinal` → the *n*-th occurrence of `match` in the verse text. Deterministic
-     when the translation exposes the token class.
+     when the translation exposes the token class. **Strong's heuristic:** when the
+     store has a `tokens` layer (§4) and the class is a Strong's number (e.g. the
+     divine name as the *n*-th YHWH-tagged token, `H3068`/`H3069`), anchor to that
+     token directly — robust even when a translation renders it "Yahweh"/"Jehovah"
+     with no LORD-caps convention.
    - `phrase` / `source` → fuzzy-align the reference phrase / quoted passage to a
      contiguous span; if alignment is weak, fall back to a model, then to manual.
+     **Strong's heuristic:** when the annotation carries the quoted words' Strong's
+     sequence and the store has a `tokens` layer, align by Strong's (LCS) instead of
+     surface words — robust to wording/word-order differences between translations.
 3. **Validate** against `hints` and `payload.expect`; downgrade `confidence` or set
    `status = needs_review` on mismatch.
 4. **Emit** a placement. Unresolvable anchors get `status = unresolved` (the

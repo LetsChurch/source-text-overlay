@@ -82,9 +82,20 @@ What's deterministic vs. LLM-assisted:
 - **`ot_quotation`** resolves by fuzzy alignment of the quotation; the rest go to
   the LLM, since wording varies between translations.
 
+**Strong's heuristic (optional, much more robust).** If the store carries a
+`tokens` layer — per-word Strong's numbers with offsets (SPEC.md §4) — resolution
+anchors to Strong's instead of surface text: the divine name becomes the n-th
+YHWH-tagged token (`H3068`/`H3069`, robust even when a translation renders it
+"Yahweh"/"Jehovah"), and a quotation whose annotation carries the quoted words'
+Strong's sequence is aligned by Strong's (LCS) rather than fuzzy wording — so far
+fewer quotations fall through to the LLM. Placements made this way are
+`method: "strongs"`. The layer is additive: a text-only store resolves exactly as
+before.
+
 `tools/build_text_store.py` reads the JSON shape published by
-`bible.helloao.org` (`/api/<TR>/complete.json`); for any other source, emit a
-store in the SPEC.md §4 format and skip step 1.
+`bible.helloao.org` (`/api/<TR>/complete.json`) — and emits the `tokens` layer
+automatically when the source provides per-word Strong's. For any other source,
+emit a store in the SPEC.md §4 format (optionally with `tokens`) and skip step 1.
 
 ## Rendering (standoff)
 
